@@ -1,0 +1,61 @@
+name: PR → n8n webhook
+
+on:
+  pull_request:
+    # If you list types, include all you need. These cover most "new PR" + updates.
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  call-n8n:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build JSON payload
+        id: payload
+        shell: bash
+        run: |
+          # Build a compact, valid JSON payload with jq
+          jq -n \
+            --arg action     "${{ github.event.action }}" \
+            --arg repo       "${{ github.repository }}" \
+            --arg repo_url   "https://github.com/${{ github.repository }}" \
+            --arg pr_number  "${{ github.event.number }}" \
+            --arg pr_url     "${{ github.event.pull_request.html_url }}" \
+            --arg base       "${{ github.event.pull_request.base.ref }}" \
+            --arg head       "${{ github.event.pull_request.head.ref }}" \
+            --arg by         "${{ github.event.pull_request.user.login }}" \
+            '{action:$action,
+              repo:$repo,
+              repo_url:$repo_url,
+              pr_number:($pr_number|tonumber),
+              pr_url:$pr_url,
+              base:$base,
+              head:$head,
+              by:$by}' > payload.json
+
+          # Compute an HMAC for your Validate node (optional but recommended)
+          if [ -n "${{ secrets.N8N_SHARED_SECRET }}" ]; then
+            sig=$(openssl dgst -sha256 -hmac "${{ secrets.N8N_SHARED_SECRET }}" -binary payload.json | xxd -p -c 256)
+            echo "signature=sha256=$sig" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: POST to n8n webhook
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Add signature header only if we computed one
+          if [ -n "${{ steps.payload.outputs.signature || '' }}" ]; then
+            curl -sS -X POST \
+              -H "Content-Type: application/json" \
+              -H "X-GitHub-Event: pull_request" \
+              -H "X-Hub-Hmac-Sha256: ${{ steps.payload.outputs.signature }}" \
+              --retry 3 --retry-delay 2 --max-time 20 \
+              --data @payload.json \
+              "${{ secrets.N8N_WEBHOOK_URL }}"
+          else
+            curl -sS -X POST \
+              -H "Content-Type: application/json" \
+              -H "X-GitHub-Event: pull_request" \
+              --retry 3 --retry-delay 2 --max-time 20 \
+              --data @payload.json \
+              "${{ secrets.N8N_WEBHOOK_URL }}"
+          fi
