@@ -38,11 +38,10 @@ jobs:
             echo "signature=sha256=$sig" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: POST to n8n webhook (Basic Auth)
+      - name: POST to n8n webhook (Header Auth)
         env:
           WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
-          N8N_USER: ${{ secrets.N8N_USER }}
-          N8N_PASS: ${{ secrets.N8N_PASS }}
+          WEBHOOK_AUTH: ${{ secrets.WEBHOOK_AUTH }}
           SIGNATURE: ${{ steps.payload.outputs.signature }}
         shell: bash
         run: |
@@ -54,9 +53,9 @@ jobs:
 
           CURL_ARGS=(
             -sS -X POST
-            -u "${N8N_USER}:${N8N_PASS}"
             -H "Content-Type: application/json"
             -H "X-GitHub-Event: pull_request"
+            -H "X-N8N-Token: ${WEBHOOK_AUTH}"
             --retry 3 --retry-delay 2 --max-time 30
             --data @payload.json
             "${WEBHOOK_URL}"
