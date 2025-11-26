@@ -55,7 +55,7 @@ jobs:
             -sS -X POST
             -H "Content-Type: application/json"
             -H "X-GitHub-Event: pull_request"
-            -H "X-N8N-Token: ${WEBHOOK_AUTH}"
+            -H "Authorization: ${WEBHOOK_AUTH}"
             --retry 3 --retry-delay 2 --max-time 30
             --data @payload.json
             "${WEBHOOK_URL}"
