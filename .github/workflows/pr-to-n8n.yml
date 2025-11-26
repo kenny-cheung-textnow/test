@@ -2,18 +2,18 @@ name: PR → n8n webhook
 
 on:
   pull_request:
-    # If you list types, include all you need. These cover most "new PR" + updates.
     types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
   call-n8n:
+    # Optional: avoid running on forked PRs (secrets aren't available there)
+    # if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     steps:
       - name: Build JSON payload
         id: payload
         shell: bash
         run: |
-          # Build a compact, valid JSON payload with jq
           jq -n \
             --arg action     "${{ github.event.action }}" \
             --arg repo       "${{ github.repository }}" \
@@ -32,30 +32,39 @@ jobs:
               head:$head,
               by:$by}' > payload.json
 
-          # Compute an HMAC for your Validate node (optional but recommended)
+          # Optional HMAC signature (keep only if you validate in n8n)
           if [ -n "${{ secrets.N8N_SHARED_SECRET }}" ]; then
             sig=$(openssl dgst -sha256 -hmac "${{ secrets.N8N_SHARED_SECRET }}" -binary payload.json | xxd -p -c 256)
             echo "signature=sha256=$sig" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: POST to n8n webhook
+      - name: POST to n8n webhook (Basic Auth)
+        env:
+          WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
+          N8N_USER: ${{ secrets.N8N_USER }}
+          N8N_PASS: ${{ secrets.N8N_PASS }}
+          SIGNATURE: ${{ steps.payload.outputs.signature }}
         shell: bash
         run: |
           set -euo pipefail
-          # Add signature header only if we computed one
-          if [ -n "${{ steps.payload.outputs.signature || '' }}" ]; then
-            curl -sS -X POST \
-              -H "Content-Type: application/json" \
-              -H "X-GitHub-Event: pull_request" \
-              -H "X-Hub-Hmac-Sha256: ${{ steps.payload.outputs.signature }}" \
-              --retry 3 --retry-delay 2 --max-time 20 \
-              --data @payload.json \
-              "${{ secrets.N8N_WEBHOOK_URL }}"
-          else
-            curl -sS -X POST \
-              -H "Content-Type: application/json" \
-              -H "X-GitHub-Event: pull_request" \
-              --retry 3 --retry-delay 2 --max-time 20 \
-              --data @payload.json \
-              "${{ secrets.N8N_WEBHOOK_URL }}"
+
+          if [ -z "${WEBHOOK_URL:-}" ]; then
+            echo "::error::N8N_WEBHOOK_URL secret is missing"; exit 1
           fi
+
+          CURL_ARGS=(
+            -sS -X POST
+            -u "${N8N_USER}:${N8N_PASS}"
+            -H "Content-Type: application/json"
+            -H "X-GitHub-Event: pull_request"
+            --retry 3 --retry-delay 2 --max-time 30
+            --data @payload.json
+            "${WEBHOOK_URL}"
+          )
+
+          # Add HMAC header if we computed one
+          if [ -n "${SIGNATURE:-}" ]; then
+            CURL_ARGS=(-H "X-Hub-Hmac-Sha256: ${SIGNATURE}" "${CURL_ARGS[@]}")
+          fi
+
+          curl "${CURL_ARGS[@]}"
